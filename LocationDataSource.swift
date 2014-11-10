@@ -14,6 +14,21 @@ class LocationDataSource: DataSource, CLLocationManagerDelegate {
 	private var refreshing = false
 	private var timer: NSTimer?
 	
+	var disabled: Bool {
+		let status = CLLocationManager.authorizationStatus()
+		return status == .Restricted || status == .Denied
+	}
+	
+	var havePermissions: Bool {
+		let status = CLLocationManager.authorizationStatus()
+		
+		if ios7() {
+			return status == .Authorized
+		}
+		
+		return status == .Authorized || status == .AuthorizedWhenInUse
+	}
+	
 	override init() {
 		// setup CLLocationManager to get location
 		locationManager = CLLocationManager()
@@ -22,16 +37,6 @@ class LocationDataSource: DataSource, CLLocationManagerDelegate {
 		// super init
 		super.init()
 		locationManager.delegate = self
-
-		// Get Location Permissions if Needed
-		if CLLocationManager.authorizationStatus() == .NotDetermined {
-			// ios7 doesn't support requestAlwaysAuthorization
-			if ios7() {
-				locationManager.startUpdatingLocation()
-			} else {
-				locationManager.requestAlwaysAuthorization()
-			}
-		}
 	}
 	
 	func refresh() {
@@ -39,14 +44,28 @@ class LocationDataSource: DataSource, CLLocationManagerDelegate {
 		refreshing = true
 		
 		// start updating location if authorized
-		if CLLocationManager.authorizationStatus() != .Restricted && CLLocationManager.authorizationStatus() != .Denied {
+		if havePermissions {
 			locationManager.startUpdatingLocation()
 			
 			// start timer
 			timer = NSTimer.scheduledTimerWithTimeInterval(3.0, target: self, selector: "timedOut", userInfo: nil, repeats: false)
-		} else {
+		} else if disabled {
 			delegate?.dataError()
 			refreshing = false
+		} else {
+			getPermissions()
+		}
+	}
+	
+	// MARK: Permissions
+	func getPermissions() {
+		if CLLocationManager.authorizationStatus() == .NotDetermined {
+			// ios7 doesn't support requestAlwaysAuthorization
+			if ios7() {
+				locationManager.startUpdatingLocation()
+			} else {
+				locationManager.requestAlwaysAuthorization()
+			}
 		}
 	}
 	
@@ -62,8 +81,8 @@ class LocationDataSource: DataSource, CLLocationManagerDelegate {
 	
 	// MARK: Location Services
 	func locationManager(manager: CLLocationManager!, didChangeAuthorizationStatus status: CLAuthorizationStatus) {
-		if CLLocationManager.authorizationStatus() != .Restricted && CLLocationManager.authorizationStatus() != .Denied {
-			locationManager.startUpdatingLocation()
+		if havePermissions && refreshing {
+			refresh()
 		} else if refreshing {
 			timer?.invalidate()
 			timer = nil
@@ -82,8 +101,14 @@ class LocationDataSource: DataSource, CLLocationManagerDelegate {
 			delegate?.dataUpdated()
 			refreshing = false
 		}
+		
+		if location != nil {
+			if let user = PFUser.currentUser() {
+				user["location"] = PFGeoPoint(location: location!)
+				user.saveInBackgroundWithBlock(nil)
+			}
+		}
 	}
-	
 	
 	// MARK: Private Helper Functions
 	private func ios7() -> Bool {
